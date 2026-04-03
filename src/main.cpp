@@ -36,7 +36,7 @@ void setup() {
   
   // Display welcome message
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setFont(u8g2_font_5x7_tr);
   
   u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 10, "ESP32-C3");
   u8g2.drawStr(X_OFFSET + 8, Y_OFFSET + 22, "0.42\" OLED");
@@ -56,7 +56,7 @@ void loop() {
   
   // Update display
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setFont(u8g2_font_5x7_tr);
   
   // Draw title
   u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 10, "ESP32-C3");
