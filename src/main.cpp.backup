@@ -4,32 +4,33 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
-#include <ESPmDNS.h>
 
-// WiFi Configuration - CHANGE THESE!
-const char* WIFI_SSID = "Hendrawifi";
-const char* WIFI_PASSWORD = "Waksolumin1234";
-
-// Access Point Configuration
-const char* AP_SSID = "ESP32-ADC";
-const char* AP_PASSWORD = "12345678";  // At least 8 characters
+// WiFi Configuration
+const char* WIFI_SSID = "YourWiFiSSID";      // Change this
+const char* WIFI_PASSWORD = "YourPassword";   // Change this
 
 // OLED Display Configuration for 0.42" display
+// This display is 72x40 pixels but uses SSD1306 with 132x64 buffer
+// The visible area is offset: adjusted for actual display boundaries
+// Reference: https://electronics.stackexchange.com/questions/725871
+
 #define I2C_SDA 5
 #define I2C_SCL 6
 #define ADC_PIN 2  // GPIO2 for ADC input (0-3.3V)
 
 // U8g2 constructor for SSD1306 128x64 display with Hardware I2C
+// The 72x40 screen is mapped in the middle of the 132x64 pixel buffer
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, I2C_SCL, I2C_SDA);
 
 const int DISPLAY_WIDTH = 72;
 const int DISPLAY_HEIGHT = 40;
-const int X_OFFSET = 28;
-const int Y_OFFSET = 24;
+const int X_OFFSET = 28; // Adjusted for actual visible area
+const int Y_OFFSET = 24; // Adjusted for actual visible area
 
-// ADC Calibration (V = slope * ADC + offset)
-float ADC_SLOPE = 0.00070978;
-float ADC_OFFSET = 0.0453;
+// ADC Calibration Constants (Linear: V = slope * ADC + offset)
+// Default calibration (can be changed via web interface)
+float ADC_SLOPE = 0.00070978;   // V per ADC unit
+float ADC_OFFSET = 0.0453;      // Voltage offset
 
 // Web server and preferences
 AsyncWebServer server(80);
@@ -42,7 +43,7 @@ float getCalibratedVoltage(int adcValue) {
 
 // Load calibration from flash
 void loadCalibration() {
-  preferences.begin("adc-cal", true);
+  preferences.begin("adc-cal", true);  // Read-only
   ADC_SLOPE = preferences.getFloat("slope", 0.00070978);
   ADC_OFFSET = preferences.getFloat("offset", 0.0453);
   preferences.end();
@@ -57,64 +58,26 @@ void loadCalibration() {
 
 // Save calibration to flash
 void saveCalibration(float slope, float offset) {
-  preferences.begin("adc-cal", false);
-  preferences.putFloat("slope", slope);
-  preferences.putFloat("offset", offset);
-  preferences.end();
-  
-  ADC_SLOPE = slope;
-  ADC_OFFSET = offset;
-  
-  Serial.println("\n--- Saved Calibration ---");
-  Serial.print("Slope: ");
-  Serial.println(slope, 8);
-  Serial.print("Offset: ");
-  Serial.println(offset, 4);
-  Serial.println("-------------------------\n");
-}
-
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  
-  Serial.println("\n=== ESP32-C3 ADC Web Calibration ===");
-  
-  // Configure ADC
-  pinMode(ADC_PIN, INPUT);
-  analogReadResolution(12);
-  analogSetAttenuation(ADC_11db);
-  
-  // Load calibration
+  preferences.begin("adc-cal", false);  // Read-write
+  preLoad calibration from flash
   loadCalibration();
   
   // Initialize OLED
   u8g2.begin();
-  u8g2.setContrast(255);
-  u8g2.setBusClock(400000);
+  u8g2.setContrast(255);      // Max contrast
+  u8g2.setBusClock(400000);   // 400kHz I2C
   
-  // Show connecting message
+  // Display connecting message
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_7x13_tr);
-  u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 15, "Starting");
-  u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 25, "WiFi...");
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 15, "Connecting");
+  u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 25, "to WiFi...");
   u8g2.sendBuffer();
   
-  // Start Access Point
-  Serial.println("\n=== Starting Access Point ===");
-  WiFi.mode(WIFI_AP_STA);  // Both AP and Station mode
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
-  IPAddress apIP = WiFi.softAPIP();
-  Serial.print("AP SSID: ");
-  Serial.println(AP_SSID);
-  Serial.print("AP Password: ");
-  Serial.println(AP_PASSWORD);
-  Serial.print("AP IP: ");
-  Serial.println(apIP);
-  Serial.println("================================\n");
-  
   // Connect to WiFi
-  Serial.print("Connecting to: ");
+  Serial.print("\nConnecting to WiFi: ");
   Serial.println(WIFI_SSID);
+  WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   int attempts = 0;
@@ -123,47 +86,33 @@ void setup() {
     Serial.print(".");
     attempts++;
   }
-  Serial.println();
   
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("WiFi connected!");
-    Serial.print("Station IP: ");
+    Serial.println("\nWiFi connected!");
+    Serial.print("IP: ");
     Serial.println(WiFi.localIP());
     
-    // Start mDNS
-    if (MDNS.begin("esp32")) {
-      Serial.println("mDNS started: http://esp32.local");
-      MDNS.addService("http", "tcp", 80);
-    } else {
-      Serial.println("Error starting mDNS");
-    }
-    
-    // Display Station IP
+    // Display IP address
     u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_7x13_tr);
     u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 10, "Connected!");
-    u8g2.setFont(u8g2_font_6x10_tr);
     char ipStr[20];
-    sprintf(ipStr, "STA:%s", WiFi.localIP().toString().c_str());
-    u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 20, ipStr);
-    sprintf(ipStr, "AP:%s", apIP.toString().c_str());
-    u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 30, ipStr);
-    u8g2.sendBuffer();
-    delay(3000);
-  } else {
-    Serial.println("WiFi failed, AP mode only");
-    u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_7x13_tr);
-    u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 10, "AP Mode");
-    u8g2.setFont(u8g2_font_6x10_tr);
-    char ipStr[20];
-    sprintf(ipStr, "%s", apIP.toString().c_str());
+    sprintf(ipStr, "%s", WiFi.localIP().toString().c_str());
+    u8g2.setFont(u8g2_font_4x6_tr);
     u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 23, ipStr);
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 35, "Starting...");
     u8g2.sendBuffer();
-    delay(3000);
+    delay(2000);
+  } else {
+    Serial.println("\nWiFi connection failed!");
+    u8g2.clearBuffer();
+    u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 20, "WiFi Fail!");
+    u8g2.sendBuffer();
+    delay(2000);
   }
   
-  // Web server - Main page
+  // Setup web server routes
+  // Main page with calibration form
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     String html = "<!DOCTYPE html><html><head>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
@@ -178,7 +127,7 @@ void setup() {
     html += "button{background:#4CAF50;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;width:100%;margin-top:10px;}";
     html += "button:hover{background:#45a049;}";
     html += ".info{background:#e3f2fd;padding:10px;border-left:4px solid #2196F3;margin:10px 0;}";
-    html += ".current{color:#666;font-size:14px;margin:5px 0;}";
+    html += ".current{color:#666;font-size:14px;}";
     html += "</style></head><body>";
     html += "<div class='container'>";
     html += "<h1>🔧 ADC Calibration</h1>";
@@ -213,7 +162,7 @@ void setup() {
     html += "2. Note the ADC reading<br>";
     html += "3. Repeat with 2-3 different voltages<br>";
     html += "4. Calculate slope = ΔV / ΔADC<br>";
-    html += "5. Calculate offset: V = slope×ADC + offset";
+    html += "5. Calculate offset using: V = slope×ADC + offset";
     html += "</div>";
     
     html += "</div>";
@@ -237,13 +186,14 @@ void setup() {
       float newOffset = request->getParam("offset", true)->value().toFloat();
       
       saveCalibration(newSlope, newOffset);
+      
       request->redirect("/");
     } else {
       request->send(400, "text/plain", "Missing parameters");
     }
   });
   
-  // API endpoint - live data
+  // API endpoint for live data
   server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
     int adc = analogRead(ADC_PIN);
     float voltage = getCalibratedVoltage(adc);
@@ -256,20 +206,42 @@ void setup() {
     request->send(200, "application/json", json);
   });
   
-  Serial.println("\n=== Starting Web Server ===");
   server.begin();
-  Serial.println("Web server started on port 80!");
-  Serial.println("\nAccess the calibration page at:");
-  Serial.println("  Option 1 (Direct AP): http://192.168.4.1");
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("  Option 2 (Station): http://");
-    Serial.println(WiFi.localIP());
-    Serial.println("  Option 3 (mDNS): http://esp32.local");
-  }
-  Serial.println("\n** Connect your device to WiFi: ESP32-ADC **");
-  Serial.println("** Password: 12345678 **");
-  Serial.println("** Then open: http://192.168.4.1 **");
-  Serial.println("==============================\n");
+  Serial.println("Web server started!");
+  Serial.println("Display initialized!"ntln("Display: 72x40 pixels");
+  
+  // Configure ADC
+  pinMode(ADC_PIN, INPUT);
+  analogReadResolution(12);  // 12-bit resolution (0-4095)
+  analogSetAttenuation(ADC_11db);  // Full range: 0-3.3V
+  Serial.print("ADC: GPIO");
+  Serial.println(ADC_PIN);
+  
+  // Print calibration info
+  Serial.println("\n--- ADC Calibration ---");
+  Serial.println("V = 0.00070978 * ADC + 0.0453");
+  Serial.println("Cal points:");
+  Serial.println("  1.0V @ ADC 1354");
+  Serial.println("  2.5V @ ADC 3419");
+  Serial.println("  2.8V @ ADC 3914");
+  Serial.println("----------------------\n");
+  
+  u8g2.begin();
+  u8g2.setContrast(255);      // Max contrast
+  u8g2.setBusClock(400000);   // 400kHz I2C
+  
+  // Display welcome message
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_5x7_tr);
+  
+  u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 10, "ESP32-C3");
+  u8g2.drawStr(X_OFFSET + 8, Y_OFFSET + 22, "0.42\" OLED");
+  u8g2.drawStr(X_OFFSET + 8, Y_OFFSET + 34, "72x40 px");
+  
+  u8g2.sendBuffer();
+  
+  Serial.println("Display initialized!");
+  delay(2000);
 }
 
 void loop() {
@@ -278,39 +250,56 @@ void loop() {
   delay(1000);
   counter++;
   
-  // Read ADC
+  // Read ADC value
   int adcValue = analogRead(ADC_PIN);
-  float voltage = getCalibratedVoltage(adcValue);
+  float voltage = getCalibratedVoltage(adcValue);  // Use calibrated conversion
   
-  // Update OLED
+  // Update display
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_7x13_tr);
+  u8g2.setFont(u8g2_font_5x7_tr);
   
-  // WiFi indicator
+  // Draw WiFi status if connected
   if (WiFi.status() == WL_CONNECTED) {
     u8g2.drawStr(X_OFFSET + 52, Y_OFFSET + 8, "W");
   }
   
-  // Display values
+  // Draw ADC value
   char buf[20];
   sprintf(buf, "ADC:%d", adcValue);
   u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 15, buf);
   
+  // Draw voltage
   sprintf(buf, "V:%.3f", voltage);
   u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 25, buf);
   
+  // Draw counter
   sprintf(buf, "Cnt:%lu", counter);
   u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 35, buf);
   
+  // Draw border (optional - shows display boundaries)
   u8g2.drawFrame(X_OFFSET, Y_OFFSET, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+  
   u8g2.sendBuffer();
   
-  // Serial output
+  // Debug output
   Serial.print("Counter: ");
   Serial.print(counter);
   Serial.print(" | ADC: ");
   Serial.print(adcValue);
   Serial.print(" | Voltage: ");
   Serial.print(voltage, 3);
+  Serial.println("V");
+}
+  
+  // Debug output
+  float uncalibratedV = (adcValue / 4095.0) * 3.3;  // For comparison
+  Serial.print("Counter: ");
+  Serial.print(counter);
+  Serial.print(" | ADC: ");
+  Serial.print(adcValue);
+  Serial.print(" | Calibrated V: ");
+  Serial.print(voltage, 3);
+  Serial.print("V | Uncal: ");
+  Serial.print(uncalibratedV, 3);
   Serial.println("V");
 }
