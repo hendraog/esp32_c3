@@ -5,6 +5,7 @@
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
 #include <ESPmDNS.h>
+#include <time.h>
 
 // WiFi Configuration - CHANGE THESE!
 const char* WIFI_SSID = "Hendrawifi";
@@ -18,6 +19,7 @@ const char* AP_PASSWORD = "12345678";  // At least 8 characters
 #define I2C_SDA 5
 #define I2C_SCL 6
 #define ADC_PIN 2  // GPIO2 for ADC input (0-3.3V)
+#define LED_PIN 3  // LED pin for time-based control
 
 // U8g2 constructor for SSD1306 128x64 display with Hardware I2C
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, I2C_SCL, I2C_SDA);
@@ -34,6 +36,16 @@ float ADC_OFFSET = 0.0453;
 // Web server and preferences
 AsyncWebServer server(80);
 Preferences preferences;
+
+// Network info for OLED display
+IPAddress staIP;
+IPAddress apIP;
+bool staConnected = false;
+
+// NTP Configuration
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 7 * 3600; // UTC +7
+const int   daylightOffset_sec = 0;
 
 // Calibrated voltage conversion
 float getCalibratedVoltage(int adcValue) {
@@ -81,6 +93,8 @@ void setup() {
   
   // Configure ADC
   pinMode(ADC_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
   
@@ -103,7 +117,7 @@ void setup() {
   Serial.println("\n=== Starting Access Point ===");
   WiFi.mode(WIFI_AP_STA);  // Both AP and Station mode
   WiFi.softAP(AP_SSID, AP_PASSWORD);
-  IPAddress apIP = WiFi.softAPIP();
+  apIP = WiFi.softAPIP();
   Serial.print("AP SSID: ");
   Serial.println(AP_SSID);
   Serial.print("AP Password: ");
@@ -129,7 +143,9 @@ void setup() {
     Serial.println("WiFi connected!");
     Serial.print("Station IP: ");
     Serial.println(WiFi.localIP());
-    
+    staConnected = true;
+    staIP = WiFi.localIP();
+
     // Start mDNS
     if (MDNS.begin("esp32")) {
       Serial.println("mDNS started: http://esp32.local");
@@ -149,6 +165,11 @@ void setup() {
     sprintf(ipStr, "AP:%s", apIP.toString().c_str());
     u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 30, ipStr);
     u8g2.sendBuffer();
+    
+    // Sync time
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    Serial.println("NTP Configured");
+    
     delay(3000);
   } else {
     Serial.println("WiFi failed, AP mode only");
@@ -282,35 +303,68 @@ void loop() {
   int adcValue = analogRead(ADC_PIN);
   float voltage = getCalibratedVoltage(adcValue);
   
+  // Get time
+  struct tm timeinfo;
+  bool timeValid = getLocalTime(&timeinfo);
+  
+  // LED Logic: 19:00 to 05:00
+  if (timeValid) {
+    if (timeinfo.tm_hour >= 19 || timeinfo.tm_hour < 5) {
+      digitalWrite(LED_PIN, HIGH);
+    } else {
+      digitalWrite(LED_PIN, LOW);
+    }
+  }
+
   // Update OLED
   u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_7x13_tr);
-  
-  // WiFi indicator
-  if (WiFi.status() == WL_CONNECTED) {
-    u8g2.drawStr(X_OFFSET + 52, Y_OFFSET + 8, "W");
-  }
-  
-  // Display values
+
   char buf[20];
-  sprintf(buf, "ADC:%d", adcValue);
-  u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 15, buf);
-  
-  sprintf(buf, "V:%.3f", voltage);
-  u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 25, buf);
-  
-  sprintf(buf, "Cnt:%lu", counter);
-  u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 35, buf);
-  
+
+  // Cycle every 10s: show IP screen for 3s, then time/voltage for 7s
+  bool showIpScreen = (counter % 10) < 3;
+
+  if (showIpScreen) {
+    u8g2.setFont(u8g2_font_6x10_tr);
+    if (staConnected) {
+      sprintf(buf, "%s", staIP.toString().c_str());
+    } else {
+      sprintf(buf, "%s", apIP.toString().c_str());
+    }
+    u8g2.drawStr(X_OFFSET + 2, Y_OFFSET + 22, buf);
+  } else {
+    // Display Time (Large & Centered)
+    if (timeValid) {
+      u8g2.setFont(u8g2_font_helvB12_tr);
+      strftime(buf, sizeof(buf), "%H:%M:%S", &timeinfo);
+      u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 18, buf);
+    } else {
+      u8g2.setFont(u8g2_font_7x13_tr);
+      u8g2.drawStr(X_OFFSET + 5, Y_OFFSET + 18, "Syncing...");
+    }
+
+    // Display Voltage (Centered below)
+    u8g2.setFont(u8g2_font_7x13_tr);
+    sprintf(buf, "V: %.3f V", voltage);
+    u8g2.drawStr(X_OFFSET + 8, Y_OFFSET + 34, buf);
+  }
+
   u8g2.drawFrame(X_OFFSET, Y_OFFSET, DISPLAY_WIDTH, DISPLAY_HEIGHT);
   u8g2.sendBuffer();
   
   // Serial output
   Serial.print("Counter: ");
   Serial.print(counter);
+  if (timeValid) {
+    char timeStr[20];
+    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+    Serial.print(" | Time: ");
+    Serial.print(timeStr);
+  }
   Serial.print(" | ADC: ");
   Serial.print(adcValue);
   Serial.print(" | Voltage: ");
   Serial.print(voltage, 3);
-  Serial.println("V");
+  Serial.print("V | LED: ");
+  Serial.println(digitalRead(LED_PIN) == HIGH ? "ON" : "OFF");
 }
