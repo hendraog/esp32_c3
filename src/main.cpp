@@ -42,6 +42,14 @@ IPAddress staIP;
 IPAddress apIP;
 bool staConnected = false;
 
+// Dashboard login
+const char* DASHBOARD_USER = "admin";
+const char* DASHBOARD_PASS = "rfw24rfv243rfsd";
+
+// LED manual control (overrides the time-based schedule once used)
+bool ledOverride = false;
+bool ledManualState = false;
+
 // NTP Configuration
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 7 * 3600; // UTC +7
@@ -187,6 +195,7 @@ void setup() {
   // Web server - Main page
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     String html = "<!DOCTYPE html><html><head>";
+    html += "<meta charset='UTF-8'>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<title>ESP32 ADC Calibration</title>";
     html += "<style>";
@@ -268,15 +277,78 @@ void setup() {
   server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
     int adc = analogRead(ADC_PIN);
     float voltage = getCalibratedVoltage(adc);
-    
+
     String json = "{";
     json += "\"adc\":" + String(adc) + ",";
-    json += "\"voltage\":" + String(voltage, 3);
+    json += "\"voltage\":" + String(voltage, 3) + ",";
+    json += "\"led\":" + String(digitalRead(LED_PIN) == HIGH ? 1 : 0);
     json += "}";
-    
+
     request->send(200, "application/json", json);
   });
-  
+
+  // Dashboard - login protected
+  server.on("/home", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (!request->authenticate(DASHBOARD_USER, DASHBOARD_PASS)) {
+      return request->requestAuthentication();
+    }
+
+    bool ledOn = digitalRead(LED_PIN) == HIGH;
+
+    String html = "<!DOCTYPE html><html><head>";
+    html += "<meta charset='UTF-8'>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<title>ESP32 Dashboard</title>";
+    html += "<style>";
+    html += "body{font-family:Arial;margin:20px;background:#f0f0f0;}";
+    html += ".container{max-width:400px;margin:auto;background:white;padding:20px;border-radius:10px;box-shadow:0 2px 4px rgba(0,0,0,0.1);}";
+    html += "h1{color:#333;text-align:center;}";
+    html += ".section{margin:20px 0;padding:15px;background:#f9f9f9;border-radius:5px;text-align:center;}";
+    html += ".current{color:#666;font-size:18px;margin:5px 0;}";
+    html += "button{padding:12px 20px;border:none;border-radius:5px;cursor:pointer;width:100%;margin-top:10px;font-size:16px;color:white;}";
+    html += ".on{background:#f44336;}";
+    html += ".off{background:#4CAF50;}";
+    html += "</style></head><body>";
+    html += "<div class='container'>";
+    html += "<h1>Dashboard</h1>";
+
+    html += "<div class='section'>";
+    html += "<div class='current'>Voltage: <span id='voltage'>-</span> V</div>";
+    html += "</div>";
+
+    html += "<div class='section'>";
+    html += "<div class='current'>LED: <span id='ledstate'>" + String(ledOn ? "ON" : "OFF") + "</span></div>";
+    html += "<form action='/led/toggle' method='POST'>";
+    html += "<button type='submit' class='" + String(ledOn ? "on" : "off") + "'>Turn LED " + String(ledOn ? "OFF" : "ON") + "</button>";
+    html += "</form>";
+    html += "</div>";
+
+    html += "</div>";
+    html += "<script>";
+    html += "setInterval(function(){";
+    html += "fetch('/data').then(r=>r.json()).then(d=>{";
+    html += "document.getElementById('voltage').innerText=d.voltage.toFixed(3);";
+    html += "});";
+    html += "},1000);";
+    html += "</script>";
+    html += "</body></html>";
+
+    request->send(200, "text/html", html);
+  });
+
+  // Manual LED toggle - login protected
+  server.on("/led/toggle", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (!request->authenticate(DASHBOARD_USER, DASHBOARD_PASS)) {
+      return request->requestAuthentication();
+    }
+
+    ledOverride = true;
+    ledManualState = !(digitalRead(LED_PIN) == HIGH);
+    digitalWrite(LED_PIN, ledManualState ? HIGH : LOW);
+
+    request->redirect("/home");
+  });
+
   Serial.println("\n=== Starting Web Server ===");
   server.begin();
   Serial.println("Web server started on port 80!");
@@ -307,8 +379,10 @@ void loop() {
   struct tm timeinfo;
   bool timeValid = getLocalTime(&timeinfo);
   
-  // LED Logic: 19:00 to 05:00
-  if (timeValid) {
+  // LED Logic: 19:00 to 05:00 (skipped once manually overridden from /home)
+  if (ledOverride) {
+    digitalWrite(LED_PIN, ledManualState ? HIGH : LOW);
+  } else if (timeValid) {
     if (timeinfo.tm_hour >= 19 || timeinfo.tm_hour < 5) {
       digitalWrite(LED_PIN, HIGH);
     } else {
