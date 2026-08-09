@@ -74,7 +74,7 @@ time_t lastVoltageSampleTime = 0;
 // Drive LED_PIN and LED_PIN2 together so they always match
 void setLed(bool state) {
   digitalWrite(LED_PIN, state ? HIGH : LOW);
-  digitalWrite(LED_PIN2, state ? HIGH : LOW);
+  digitalWrite(LED_PIN2, state ? LOW : HIGH);
 }
 
 // Calibrated voltage conversion
