@@ -24,7 +24,7 @@ const char* AP_PASSWORD = "12345678";  // At least 8 characters
 #define LED_PIN2 8 // Mirrors LED_PIN state
 
 // How often to disable WiFi, take a voltage reading, and push it to Node-RED
-const int VOLTAGE_COLLECT_INTERVAL_SEC = 10;
+const int VOLTAGE_COLLECT_INTERVAL_SEC = 30;
 const int WIFI_RECONNECT_ATTEMPTS = 20; // x 500ms = 10s timeout
 
 // U8g2 constructor for SSD1306 128x64 display with Hardware I2C
